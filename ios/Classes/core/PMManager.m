@@ -42,18 +42,25 @@
 
     PHFetchOptions *fetchCollectionOptions = [PHFetchOptions new];
 
-    if (hasAll) {
-        PHFetchResult<PHAssetCollection *> *allResult = [PHAssetCollection
+    PHFetchResult<PHAssetCollection *> *smartAlbumResult = [PHAssetCollection
             fetchAssetCollectionsWithType:PHAssetCollectionTypeSmartAlbum
-                                  subtype:PHAssetCollectionSubtypeSmartAlbumUserLibrary
+                                  subtype:PHAssetCollectionSubtypeAlbumRegular
                                   options:fetchCollectionOptions];
-        [self injectAssetPathIntoArray:array result:allResult options:assetOptions isAll:YES];
-    }
+    [self injectAssetPathIntoArray:array result:smartAlbumResult options:assetOptions hasAll:hasAll];
 
     PHFetchResult<PHCollection *> *topLevelResult = [PHAssetCollection fetchTopLevelUserCollectionsWithOptions:fetchCollectionOptions];
-    [self injectAssetPathIntoArray:array result:topLevelResult options:assetOptions isAll:NO];
+    [self injectAssetPathIntoArray:array result:topLevelResult options:assetOptions hasAll:hasAll];
 
     return array;
+}
+
+- (BOOL)existsWithId:(NSString *)assetId {
+  PHFetchResult<PHAsset *> *result = [PHAsset fetchAssetsWithLocalIdentifiers:@[ assetId ]
+                                                                      options:[PHFetchOptions new]];
+  if (!result) {
+    return NO;
+  }
+  return result.count >= 1;
 }
 
 #pragma clang diagnostic push
@@ -61,7 +68,7 @@
 
 - (void)injectAssetPathIntoArray:(NSMutableArray<PMAssetPathEntity *> *)array
                           result:(PHFetchResult *)result options:(PHFetchOptions *)options
-                           isAll:(BOOL)isAll {
+                          hasAll:(BOOL)hasAll {
     for (id collection in result) {
         if (![collection isMemberOfClass:[PHAssetCollection class]]) {
             return;
@@ -76,7 +83,11 @@
                         name:assetCollection.localizedTitle
                   assetCount:(int) fetchResult.count];
 
-        entity.isAll = isAll;
+        entity.isAll = assetCollection.assetCollectionSubtype == PHAssetCollectionSubtypeSmartAlbumUserLibrary;
+
+        if (!hasAll && entity.isAll) {
+            continue;
+        }
 
         if (entity.assetCount && entity.assetCount > 0) {
             [array addObject:entity];
@@ -136,7 +147,7 @@
         return result;
     }
 
-    PHFetchOptions *assetOptions = [self getAssetOptions:type date:date];
+    PHFetchOptions *assetOptions = [self getAssetOptions:(int)type date:date];
 
     PHAssetCollection *collection = fetchResult.firstObject;
     PHFetchResult<PHAsset *> *assetArray = [PHAsset fetchAssetsInAssetCollection:collection options:assetOptions];
@@ -178,7 +189,7 @@
     long createDt = (long) date.timeIntervalSince1970;
 
     NSDate *modifiedDate = asset.modificationDate;
-    long modifiedTimeStamp = (long)modifiedDate.timeIntervalSince1970;
+    long modifiedTimeStamp = (long) modifiedDate.timeIntervalSince1970;
 
     PMAssetEntity *entity = [PMAssetEntity entityWithId:asset.localIdentifier
                                                createDt:createDt
@@ -333,7 +344,7 @@
         }
     }];
 
-    [manager requestImageForAsset:asset targetSize:PHImageManagerMaximumSize contentMode:PHImageContentModeDefault options: options resultHandler:^(UIImage * _Nullable image, NSDictionary * _Nullable info) {
+    [manager requestImageForAsset:asset targetSize:PHImageManagerMaximumSize contentMode:PHImageContentModeDefault options:options resultHandler:^(UIImage *_Nullable image, NSDictionary *_Nullable info) {
 
         BOOL downloadFinished = [PMManager isDownloadFinish:info];
         if (!downloadFinished) {
@@ -344,8 +355,8 @@
             return;
         }
 
-        NSMutableString *path = [NSMutableString stringWithString: homePath];
-        NSString* filename = [asset.localIdentifier stringByReplacingOccurrencesOfString:@"/"
+        NSMutableString *path = [NSMutableString stringWithString:homePath];
+        NSString *filename = [asset.localIdentifier stringByReplacingOccurrencesOfString:@"/"
                                                                               withString:@"_"];
         [path appendFormat:@"%@/%@.jpg", @".image", filename];
         [UIImageJPEGRepresentation(image, 1.0) writeToFile:path atomically:YES];
@@ -369,12 +380,12 @@
     PHFetchOptions *assetOptions = [self getAssetOptions:type date:date];
     PHFetchResult<PHAsset *> *fetchResult = [PHAsset fetchAssetsInAssetCollection:collection options:assetOptions];
 
-    return [PMAssetPathEntity entityWithId:id name:collection.localizedTitle assetCount:fetchResult.count];
+    return [PMAssetPathEntity entityWithId:id name:collection.localizedTitle assetCount:(int)fetchResult.count];
 }
 
 - (PHFetchOptions *)getAssetOptions:(int)type date:(NSDate *)date {
     PHFetchOptions *options = [PHFetchOptions new];
-    options.sortDescriptors = @[ [NSSortDescriptor sortDescriptorWithKey:@"creationDate" ascending: NO] ];
+    options.sortDescriptors = @[[NSSortDescriptor sortDescriptorWithKey:@"creationDate" ascending:NO]];
 
     if (type == 1) {
         options.predicate = [NSPredicate predicateWithFormat:@"mediaType == %d AND creationDate <= %@", PHAssetMediaTypeImage, date];
@@ -411,17 +422,18 @@
 }
 
 - (void)saveImage:(NSData *)data title:(NSString *)title desc:(NSString *)desc block:(AssetResult)block {
-    PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAsset];
+    __block NSString *assetId = nil;
     [[PHPhotoLibrary sharedPhotoLibrary]
             performChanges:^{
+                PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAsset];
                 PHAssetResourceCreationOptions *options = [PHAssetResourceCreationOptions new];
                 [options setOriginalFilename:title];
                 [request addResourceWithType:PHAssetResourceTypePhoto data:data options:options];
+                assetId = request.placeholderForCreatedAsset.localIdentifier;
             } completionHandler:^(BOOL success, NSError *error) {
         if (success) {
-            NSString *id = request.placeholderForCreatedAsset.localIdentifier;
-            NSLog(@"create asset : id = %@", id);
-            block([self getAssetEntity:id]);
+            NSLog(@"create asset : id = %@", assetId);
+            block([self getAssetEntity:assetId]);
         } else {
             NSLog(@"create fail");
             block(nil);
@@ -431,18 +443,18 @@
 
 - (void)saveVideo:(NSString *)path title:(NSString *)title desc:(NSString *)desc block:(AssetResult)block {
     NSURL *fileURL = [NSURL fileURLWithPath:path];
-    PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAssetFromVideoAtFileURL:fileURL];
-
+    __block NSString *assetId = nil;
     [[PHPhotoLibrary sharedPhotoLibrary]
             performChanges:^{
+                PHAssetCreationRequest *request = [PHAssetCreationRequest creationRequestForAssetFromVideoAtFileURL:fileURL];
                 PHAssetResourceCreationOptions *options = [PHAssetResourceCreationOptions new];
                 [options setOriginalFilename:title];
                 [request addResourceWithType:PHAssetResourceTypeVideo fileURL:fileURL options:options];
+                assetId = request.placeholderForCreatedAsset.localIdentifier;
             } completionHandler:^(BOOL success, NSError *error) {
         if (success) {
-            NSString *id = request.placeholderForCreatedAsset.localIdentifier;
-            NSLog(@"create asset : id = %@", id);
-            block([self getAssetEntity:id]);
+            NSLog(@"create asset : id = %@", assetId);
+            block([self getAssetEntity:assetId]);
         } else {
             NSLog(@"create fail");
             block(nil);

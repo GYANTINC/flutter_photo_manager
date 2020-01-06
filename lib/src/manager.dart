@@ -6,8 +6,6 @@ Plugin _plugin = Plugin();
 ///
 /// 这个类可以获取
 class PhotoManager {
-  static const MethodChannel _channel = const MethodChannel('image_scanner');
-
   /// in android WRITE_EXTERNAL_STORAGE  READ_EXTERNAL_STORAGE
   ///
   /// in ios request the photo permission
@@ -139,8 +137,8 @@ class PhotoManager {
     );
   }
 
-  static Future<bool> _assetExistsWithId(String id) async {
-    return true;
+  static Future<bool> _assetExistsWithId(String id) {
+    return _plugin.assetExistsWithId(id);
   }
 
   // static Future<AssetEntity> _createAssetEntityWithId(String id) async {
